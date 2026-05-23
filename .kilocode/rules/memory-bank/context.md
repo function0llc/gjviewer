@@ -2,9 +2,9 @@
 
 ## Current State
 
-**Template Status**: ✅ Ready for development
+**Template Status**: ✅ GeoJSON viewer implemented
 
-The template is a clean Next.js 16 starter with TypeScript and Tailwind CSS 4. It's ready for AI-assisted expansion to build any type of application.
+The project is now a simple browser-based GeoJSON viewer built on the Next.js 16 starter. Users can upload `.geojson` or `.json` files, preview points/lines/polygons in an SVG map, and review feature counts and properties without sending data to a server.
 
 ## Recently Completed
 
@@ -14,6 +14,7 @@ The template is a clean Next.js 16 starter with TypeScript and Tailwind CSS 4. I
 - [x] ESLint configuration
 - [x] Memory bank documentation
 - [x] Recipe system for common features
+- [x] Browser-only GeoJSON upload, validation, SVG preview, and data summary UI
 
 ## Current Structure
 
@@ -22,15 +23,12 @@ The template is a clean Next.js 16 starter with TypeScript and Tailwind CSS 4. I
 | `src/app/page.tsx` | Home page | ✅ Ready |
 | `src/app/layout.tsx` | Root layout | ✅ Ready |
 | `src/app/globals.css` | Global styles | ✅ Ready |
+| `src/components/GeoJsonViewer.tsx` | Client GeoJSON parser, preview renderer, and summary cards | ✅ Ready |
 | `.kilocode/` | AI context & recipes | ✅ Ready |
 
 ## Current Focus
 
-The template is ready. Next steps depend on user requirements:
-
-1. What type of application to build
-2. What features are needed
-3. Design/branding preferences
+The app focuses on local GeoJSON exploration. The current implementation intentionally avoids a backend or database; uploaded files are parsed in the browser and not persisted.
 
 ## Quick Start Guide
 
@@ -85,3 +83,4 @@ export async function GET() {
 | Date | Changes |
 |------|---------|
 | Initial | Template created with base setup |
+| 2026-05-23 | Built GeoJSON Studio with client-side upload, validation, SVG rendering, feature summaries, and custom visual styling |
