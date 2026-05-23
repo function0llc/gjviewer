@@ -389,7 +389,7 @@ export function GeoJsonViewer() {
   }
 
   return (
-    <section className="relative z-10 grid gap-8 lg:grid-cols-[0.9fr_1.1fr]">
+    <section className="relative z-10 flex flex-col gap-8">
       <div className="rounded-[2rem] border border-white/12 bg-[#10251f]/85 p-6 shadow-2xl shadow-black/25 backdrop-blur md:p-8">
         <div className="inline-flex rounded-full border border-emerald-200/20 bg-emerald-200/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-emerald-100">
           GeoJSON Studio
@@ -570,7 +570,7 @@ export function GeoJsonViewer() {
         </div>
       </div>
 
-      <div className="rounded-[2rem] border border-white/12 bg-[#10251f]/78 p-6 shadow-xl shadow-black/20 backdrop-blur lg:col-span-2">
+      <div className="rounded-[2rem] border border-white/12 bg-[#10251f]/78 p-6 shadow-xl shadow-black/20 backdrop-blur">
         <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
           <div>
             <h2 className="text-2xl font-black tracking-[-0.03em] text-[#fff9e8]">
