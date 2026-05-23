@@ -1,7 +1,6 @@
 "use client";
 
 import { ChangeEvent, useMemo, useState } from "react";
-import * as turf from "@turf/turf";
 
 type Position = [number, number, ...number[]];
 
@@ -39,6 +38,25 @@ type Bounds = {
   maxX: number;
   maxY: number;
 };
+
+type Layer = {
+  id: string;
+  name: string;
+  data: GeoJson;
+  color: string;
+  visible: boolean;
+};
+
+const LAYER_COLORS = [
+  "#f2c66d",
+  "#68b984",
+  "#7eb8da",
+  "#e88a7a",
+  "#b49ee8",
+  "#e8c47a",
+  "#84c4b0",
+  "#d48eaa",
+];
 
 const SAMPLE_GEOJSON: GeoJson = {
   type: "FeatureCollection",
@@ -227,209 +245,111 @@ function stringifyProperty(value: unknown) {
   return JSON.stringify(value);
 }
 
-function clipFeatures(
-  features: Feature[],
-  clipBoundary: GeoJson | null,
-): { clipped: Feature[]; clippedCount: number; originalCount: number } {
-  if (!clipBoundary) {
-    return { clipped: features, clippedCount: features.length, originalCount: features.length };
-  }
-
-  const clipFeaturesList = featuresFromGeoJson(clipBoundary);
-  const clipPolygons = clipFeaturesList.filter(
-    (f) =>
-      f.geometry?.type === "Polygon" || f.geometry?.type === "MultiPolygon",
-  );
-
-  if (clipPolygons.length === 0) {
-    return { clipped: features, clippedCount: features.length, originalCount: features.length };
-  }
-
-  const result: Feature[] = [];
-
-  for (const feature of features) {
-    if (!feature.geometry) continue;
-
-    try {
-      if (feature.geometry.type === "Point" || feature.geometry.type === "MultiPoint") {
-        for (const clipFeat of clipPolygons) {
-          if (turf.booleanPointInPolygon(feature as unknown as Parameters<typeof turf.booleanPointInPolygon>[0], clipFeat as unknown as Parameters<typeof turf.booleanPointInPolygon>[1])) {
-            result.push(feature);
-            break;
-          }
-        }
-      } else if (
-        feature.geometry.type === "Polygon" ||
-        feature.geometry.type === "MultiPolygon" ||
-        feature.geometry.type === "LineString" ||
-        feature.geometry.type === "MultiLineString"
-      ) {
-        let anyIntersected = false;
-        const clippedGeometries: Geometry[] = [];
-
-        for (const clipFeat of clipPolygons) {
-          try {
-            const intersected = turf.intersect(feature as unknown as Parameters<typeof turf.intersect>[0], clipFeat as unknown as Parameters<typeof turf.intersect>[1]);
-            if (intersected && intersected.geometry) {
-              anyIntersected = true;
-              clippedGeometries.push(intersected.geometry as Geometry);
-            }
-          } catch {
-            // Skip features that can't be intersected
-          }
-        }
-
-        if (anyIntersected) {
-          if (clippedGeometries.length === 1) {
-            result.push({
-              ...feature,
-              geometry: clippedGeometries[0],
-            });
-          } else if (clippedGeometries.length > 1) {
-            result.push({
-              ...feature,
-              geometry: {
-                type: "GeometryCollection",
-                geometries: clippedGeometries,
-              },
-            });
-          } else {
-            result.push(feature);
-          }
-        }
-      } else if (feature.geometry.type === "GeometryCollection") {
-        const clippedParts: Geometry[] = [];
-        for (const geom of feature.geometry.geometries) {
-          const singleFeature: Feature = {
-            type: "Feature",
-            geometry: geom,
-            properties: feature.properties,
-          };
-          const subResult = clipFeatures([singleFeature], clipBoundary);
-          if (subResult.clipped.length > 0) {
-            clippedParts.push(subResult.clipped[0].geometry!);
-          }
-        }
-        if (clippedParts.length > 0) {
-          result.push({
-            ...feature,
-            geometry: {
-              type: "GeometryCollection",
-              geometries: clippedParts,
-            },
-          });
-        }
-      }
-    } catch {
-      // If clipping fails, skip the feature
-    }
-  }
-
-  return { clipped: result, clippedCount: result.length, originalCount: features.length };
+function hexToRgba(hex: string, alpha: number) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 export function GeoJsonViewer() {
-  const [geoJson, setGeoJson] = useState<GeoJson>(SAMPLE_GEOJSON);
-  const [fileName, setFileName] = useState("Sample data");
+  const [layers, setLayers] = useState<Layer[]>([
+    { id: "sample", name: "Sample data", data: SAMPLE_GEOJSON, color: LAYER_COLORS[0], visible: true },
+  ]);
   const [error, setError] = useState<string | null>(null);
 
-  const [clipGeoJson, setClipGeoJson] = useState<GeoJson | null>(null);
-  const [clipFileName, setClipFileName] = useState<string | null>(null);
-  const [clipError, setClipError] = useState<string | null>(null);
+  const visibleLayers = useMemo(() => layers.filter((l) => l.visible), [layers]);
 
-  const features = useMemo(() => featuresFromGeoJson(geoJson), [geoJson]);
-
-  const { clipped, clippedCount, originalCount } = useMemo(
-    () => clipFeatures(features, clipGeoJson),
-    [features, clipGeoJson],
+  const layerData = useMemo(
+    () =>
+      visibleLayers.map((layer) => ({
+        layer,
+        features: featuresFromGeoJson(layer.data),
+      })),
+    [visibleLayers],
   );
 
-  const shapes = useMemo(
-    () => clipped.flatMap((feature) => shapesFromGeometry(feature.geometry)),
-    [clipped],
+  const allShapes = useMemo(
+    () =>
+      layerData.flatMap(({ layer, features }) =>
+        features.flatMap((f) =>
+          shapesFromGeometry(f.geometry).map((s) => ({ ...s, color: layer.color, layerId: layer.id })),
+        ),
+      ),
+    [layerData],
   );
-  const bounds = useMemo(() => getBounds(shapes), [shapes]);
 
-  const clipShapes = useMemo(
-    () => (clipGeoJson ? featuresFromGeoJson(clipGeoJson).flatMap((f) => shapesFromGeometry(f.geometry)) : []),
-    [clipGeoJson],
+  const bounds = useMemo(() => getBounds(allShapes), [allShapes]);
+
+  const totalFeatures = useMemo(
+    () => layerData.reduce((sum, { features }) => sum + features.length, 0),
+    [layerData],
   );
 
-  const geometryCounts = useMemo(() => {
-    return clipped.reduce<Record<string, number>>((counts, feature) => {
-      const type = feature.geometry?.type ?? "No geometry";
-      counts[type] = (counts[type] ?? 0) + 1;
-      return counts;
-    }, {});
-  }, [clipped]);
+  const totalShapes = allShapes.length;
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+    const files = event.target.files;
 
-    if (!file) {
+    if (!files || files.length === 0) {
       return;
     }
 
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text) as unknown;
+    const newLayers: Layer[] = [];
 
-      if (!isGeoJson(parsed)) {
-        throw new Error("The selected file is not valid GeoJSON.");
+    for (const file of Array.from(files)) {
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text) as unknown;
+
+        if (!isGeoJson(parsed)) {
+          throw new Error(`${file.name} is not valid GeoJSON.`);
+        }
+
+        newLayers.push({
+          id: `layer-${Date.now()}-${file.name}`,
+          name: file.name,
+          data: parsed,
+          color: LAYER_COLORS[layers.length + newLayers.length] ?? LAYER_COLORS[(layers.length + newLayers.length) % LAYER_COLORS.length],
+          visible: true,
+        });
+      } catch (caughtError) {
+        setError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : `Could not read ${file.name}.`,
+        );
       }
+    }
 
-      setGeoJson(parsed);
-      setFileName(file.name);
+    if (newLayers.length > 0) {
+      setLayers((prev) => [...prev, ...newLayers]);
       setError(null);
-    } catch (caughtError) {
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Could not read the selected file.",
-      );
     }
+
+    event.target.value = "";
   }
 
-  async function handleClipFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-
-    if (!file) {
-      return;
-    }
-
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text) as unknown;
-
-      if (!isGeoJson(parsed)) {
-        throw new Error("The selected file is not valid GeoJSON.");
-      }
-
-      const clipFeatures = featuresFromGeoJson(parsed);
-      const hasPolygons = clipFeatures.some(
-        (f) => f.geometry?.type === "Polygon" || f.geometry?.type === "MultiPolygon",
-      );
-
-      if (!hasPolygons) {
-        throw new Error("Clipping boundary must contain at least one Polygon or MultiPolygon geometry.");
-      }
-
-      setClipGeoJson(parsed);
-      setClipFileName(file.name);
-      setClipError(null);
-    } catch (caughtError) {
-      setClipError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Could not read the selected file.",
-      );
-    }
+  function toggleLayer(id: string) {
+    setLayers((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
+    );
   }
 
-  function clearClipBoundary() {
-    setClipGeoJson(null);
-    setClipFileName(null);
-    setClipError(null);
+  function removeLayer(id: string) {
+    setLayers((prev) => prev.filter((l) => l.id !== id));
+  }
+
+  function moveLayer(id: string, direction: "up" | "down") {
+    setLayers((prev) => {
+      const index = prev.findIndex((l) => l.id === id);
+      if (index < 0) return prev;
+      const newIndex = direction === "up" ? index - 1 : index + 1;
+      if (newIndex < 0 || newIndex >= prev.length) return prev;
+      const copy = [...prev];
+      [copy[index], copy[newIndex]] = [copy[newIndex], copy[index]];
+      return copy;
+    });
   }
 
   function project([x, y]: Position) {
@@ -458,40 +378,11 @@ export function GeoJsonViewer() {
     };
   }
 
-  function projectClip([x, y]: Position) {
-    const width = 960;
-    const height = 560;
-    const padding = 48;
-
-    const allBounds = getBounds([...shapes, ...clipShapes]);
-    const effectiveBounds = allBounds ?? bounds;
-
-    if (!effectiveBounds) {
-      return { x: width / 2, y: height / 2 };
-    }
-
-    const spanX = effectiveBounds.maxX - effectiveBounds.minX || 1;
-    const spanY = effectiveBounds.maxY - effectiveBounds.minY || 1;
-    const scale = Math.min(
-      (width - padding * 2) / spanX,
-      (height - padding * 2) / spanY,
-    );
-    const drawWidth = spanX * scale;
-    const drawHeight = spanY * scale;
-    const offsetX = (width - drawWidth) / 2;
-    const offsetY = (height - drawHeight) / 2;
-
-    return {
-      x: offsetX + (x - effectiveBounds.minX) * scale,
-      y: height - (offsetY + (y - effectiveBounds.minY) * scale),
-    };
-  }
-
-  function pathForPoints(points: Position[], projector: (p: Position) => { x: number; y: number }) {
+  function pathForPoints(points: Position[]) {
     return points
       .filter(isPosition)
       .map((position, index) => {
-        const point = projector(position);
+        const point = project(position);
         return `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
       })
       .join(" ");
@@ -504,24 +395,24 @@ export function GeoJsonViewer() {
           GeoJSON Studio
         </div>
         <h1 className="mt-6 max-w-xl text-4xl font-black tracking-[-0.04em] text-[#fff9e8] md:text-6xl">
-          Upload a file and see your map take shape.
+          Stack multiple layers on one map.
         </h1>
         <p className="mt-5 text-base leading-8 text-[#d8e4cc] md:text-lg">
-          Drop in a GeoJSON FeatureCollection, feature, or geometry. The viewer
-          validates the file in your browser, draws the shapes, and summarizes
-          the contents without sending your data anywhere.
+          Upload one or more GeoJSON files. Each becomes a colored layer you can
+          toggle, reorder, or remove. All data stays in your browser.
         </p>
 
         <label className="mt-8 flex cursor-pointer flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-[#f2c66d]/55 bg-[#f2c66d]/10 px-6 py-10 text-center transition hover:border-[#f9de99] hover:bg-[#f2c66d]/16">
           <span className="text-lg font-bold text-[#fff9e8]">
-            Choose a .geojson or .json file
+            Choose one or more .geojson / .json files
           </span>
           <span className="mt-2 text-sm text-[#d8e4cc]">
-            Points, lines, polygons, and geometry collections are supported.
+            Each file becomes its own map layer.
           </span>
           <input
             className="sr-only"
             type="file"
+            multiple
             accept=".geojson,.json,application/geo+json,application/json"
             onChange={handleFileChange}
           />
@@ -533,60 +424,79 @@ export function GeoJsonViewer() {
           </div>
         ) : null}
 
-        <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
+        <div className="mt-6">
           <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-[#f2c66d]">
-            Clipping Boundary
+            Layers ({layers.length})
           </h3>
-          <p className="mt-1 text-sm text-[#d8e4cc]">
-            Upload a polygon GeoJSON to clip the main data to its bounds.
-          </p>
 
-          {clipFileName ? (
-            <div className="mt-3 flex items-center gap-3">
-              <span className="flex-1 truncate text-sm font-semibold text-[#fff9e8]">
-                {clipFileName}
-              </span>
-              <button
-                className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-semibold text-[#fff9e8] transition hover:bg-white/20"
-                onClick={clearClipBoundary}
-              >
-                Remove
-              </button>
-            </div>
-          ) : (
-            <label className="mt-3 flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-white/15 bg-white/5 px-4 py-4 text-center transition hover:border-white/25 hover:bg-white/8">
-              <span className="text-sm font-medium text-[#d8e4cc]">
-                Upload clipping boundary
-              </span>
-              <input
-                className="sr-only"
-                type="file"
-                accept=".geojson,.json,application/geo+json,application/json"
-                onChange={handleClipFileChange}
-              />
-            </label>
-          )}
-
-          {clipError ? (
-            <div className="mt-3 rounded-xl border border-red-300/30 bg-red-500/12 px-3 py-2 text-xs text-red-100">
-              {clipError}
-            </div>
-          ) : null}
+          <div className="mt-3 flex flex-col gap-2">
+            {[...layers].reverse().map((layer, reverseIndex) => {
+              const realIndex = layers.length - 1 - reverseIndex;
+              const shapes = featuresFromGeoJson(layer.data).flatMap((f) =>
+                shapesFromGeometry(f.geometry),
+              );
+              return (
+                <div
+                  key={layer.id}
+                  className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3"
+                >
+                  <button
+                    className={`h-5 w-5 shrink-0 rounded-full border-2 transition ${layer.visible ? "border-white/60" : "border-white/20"}`}
+                    style={{
+                      backgroundColor: layer.visible ? layer.color : "transparent",
+                    }}
+                    onClick={() => toggleLayer(layer.id)}
+                    aria-label={layer.visible ? `Hide ${layer.name}` : `Show ${layer.name}`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-[#fff9e8]">
+                      {layer.name}
+                    </div>
+                    <div className="text-xs text-[#d8e4cc]">
+                      {shapes.length} shape{shapes.length !== 1 ? "s" : ""}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      className="rounded-lg px-1.5 py-1 text-xs text-[#d8e4cc] transition hover:text-[#fff9e8]"
+                      onClick={() => moveLayer(layer.id, "up")}
+                      disabled={realIndex === 0}
+                      aria-label="Move layer up"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      className="rounded-lg px-1.5 py-1 text-xs text-[#d8e4cc] transition hover:text-[#fff9e8]"
+                      onClick={() => moveLayer(layer.id, "down")}
+                      disabled={realIndex === layers.length - 1}
+                      aria-label="Move layer down"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      className="rounded-lg px-1.5 py-1 text-xs text-red-300/70 transition hover:text-red-200"
+                      onClick={() => removeLayer(layer.id)}
+                      aria-label={`Remove ${layer.name}`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatCard label="File" value={fileName} />
-          <StatCard label="Features" value={clipped.length.toString()} />
-          <StatCard label="Shapes" value={shapes.length.toString()} />
-          <StatCard
-            label="Bounds"
-            value={bounds ? `${formatNumber(bounds.minX)}, ${formatNumber(bounds.minY)}` : "-"}
-          />
+          <StatCard label="Layers" value={layers.length.toString()} />
+          <StatCard label="Visible" value={visibleLayers.length.toString()} />
+          <StatCard label="Features" value={totalFeatures.toString()} />
+          <StatCard label="Shapes" value={totalShapes.toString()} />
         </div>
 
-        {clipGeoJson && (
-          <div className="mt-3 rounded-xl border border-[#8b6fdf]/30 bg-[#8b6fdf]/10 px-4 py-2 text-sm text-[#d8c6f5]">
-            Clipped {clippedCount} of {originalCount} features to boundary.
+        {bounds && (
+          <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs text-[#d8e4cc]">
+            Bounds: {formatNumber(bounds.minX)}, {formatNumber(bounds.minY)} — {formatNumber(bounds.maxX)}, {formatNumber(bounds.maxY)}
           </div>
         )}
       </div>
@@ -598,29 +508,12 @@ export function GeoJsonViewer() {
             className="relative h-full min-h-[360px] w-full"
             viewBox="0 0 960 560"
             role="img"
-            aria-label="Uploaded GeoJSON preview"
+            aria-label="GeoJSON layers preview"
           >
             <rect width="960" height="560" fill="transparent" />
 
-            {clipShapes.map((shape, index) => {
-              if (shape.kind === "polygon") {
-                return shape.rings.map((ring, ringIndex) => (
-                  <path
-                    key={`clip-${index}-${ringIndex}`}
-                    d={pathForPoints(ring, projectClip)}
-                    fill="rgba(139, 111, 223, 0.08)"
-                    stroke="#8b6fdf"
-                    strokeDasharray="8 4"
-                    strokeLinejoin="round"
-                    strokeWidth="3"
-                  />
-                ));
-              }
-              return null;
-            })}
-
             {bounds ? (
-              shapes.map((shape, index) => {
+              allShapes.map((shape, index) => {
                 if (shape.kind === "point") {
                   const point = project(shape.point);
                   return (
@@ -629,7 +522,7 @@ export function GeoJsonViewer() {
                       cx={point.x}
                       cy={point.y}
                       r="8"
-                      fill="#f2c66d"
+                      fill={shape.color}
                       stroke="#fff9e8"
                       strokeWidth="3"
                     />
@@ -640,9 +533,9 @@ export function GeoJsonViewer() {
                   return (
                     <path
                       key={`line-${index}`}
-                      d={pathForPoints(shape.points, project)}
+                      d={pathForPoints(shape.points)}
                       fill="none"
-                      stroke="#f2c66d"
+                      stroke={shape.color}
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth="6"
@@ -653,9 +546,9 @@ export function GeoJsonViewer() {
                 return shape.rings.map((ring, ringIndex) => (
                   <path
                     key={`polygon-${index}-${ringIndex}`}
-                    d={`${pathForPoints(ring, project)} Z`}
-                    fill={ringIndex === 0 ? "#68b98466" : "#17372f"}
-                    stroke="#9fe7b4"
+                    d={`${pathForPoints(ring)} Z`}
+                    fill={ringIndex === 0 ? hexToRgba(shape.color, 0.35) : "#17372f"}
+                    stroke={shape.color}
                     strokeLinejoin="round"
                     strokeWidth="3"
                   />
@@ -684,54 +577,80 @@ export function GeoJsonViewer() {
               Data summary
             </h2>
             <p className="mt-2 text-sm text-[#d8e4cc]">
-              Review geometry types and the first few feature properties before
-              you share or publish the map.
+              Review geometry types and the first few feature properties across
+              all visible layers.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {Object.entries(geometryCounts).map(([type, count]) => (
-              <span
-                key={type}
-                className="rounded-full border border-emerald-200/20 bg-emerald-200/10 px-3 py-1 text-sm font-semibold text-emerald-50"
-              >
-                {type}: {count}
-              </span>
-            ))}
+            {layerData.map(({ layer, features }) => {
+              const counts = features.reduce<Record<string, number>>((acc, f) => {
+                const type = f.geometry?.type ?? "No geometry";
+                acc[type] = (acc[type] ?? 0) + 1;
+                return acc;
+              }, {});
+              return (
+                <div key={layer.id} className="flex items-center gap-2">
+                  <span
+                    className="h-3 w-3 rounded-full"
+                    style={{ backgroundColor: layer.color }}
+                  />
+                  <span className="text-sm font-semibold text-[#fff9e8]">
+                    {layer.name}
+                  </span>
+                  {Object.entries(counts).map(([type, count]) => (
+                    <span
+                      key={`${layer.id}-${type}`}
+                      className="rounded-full border border-white/10 bg-white/8 px-2 py-0.5 text-xs text-[#d8e4cc]"
+                    >
+                      {type}: {count}
+                    </span>
+                  ))}
+                </div>
+              );
+            })}
           </div>
         </div>
 
         <div className="mt-6 grid gap-3 md:grid-cols-3">
-          {clipped.slice(0, 6).map((feature, index) => {
-            const properties = Object.entries(feature.properties ?? {}).slice(0, 4);
+          {layerData.flatMap(({ layer, features }) =>
+            features.slice(0, 3).map((feature, index) => {
+              const properties = Object.entries(feature.properties ?? {}).slice(0, 4);
 
-            return (
-              <article
-                key={`${feature.geometry?.type ?? "feature"}-${index}`}
-                className="rounded-2xl border border-white/10 bg-white/8 p-4"
-              >
-                <div className="text-xs font-bold uppercase tracking-[0.22em] text-[#f2c66d]">
-                  Feature {index + 1}
-                </div>
-                <div className="mt-2 text-lg font-black text-[#fff9e8]">
-                  {feature.geometry?.type ?? "No geometry"}
-                </div>
-                <dl className="mt-4 space-y-2 text-sm text-[#d8e4cc]">
-                  {properties.length > 0 ? (
-                    properties.map(([key, value]) => (
-                      <div key={key} className="flex justify-between gap-4">
-                        <dt className="font-semibold text-[#fff9e8]">{key}</dt>
-                        <dd className="truncate text-right">
-                          {stringifyProperty(value)}
-                        </dd>
-                      </div>
-                    ))
-                  ) : (
-                    <div>No properties</div>
-                  )}
-                </dl>
-              </article>
-            );
-          })}
+              return (
+                <article
+                  key={`${layer.id}-${feature.geometry?.type ?? "feature"}-${index}`}
+                  className="rounded-2xl border border-white/10 bg-white/8 p-4"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: layer.color }}
+                    />
+                    <span className="text-xs font-bold uppercase tracking-[0.22em] text-[#f2c66d]">
+                      {layer.name}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-lg font-black text-[#fff9e8]">
+                    {feature.geometry?.type ?? "No geometry"}
+                  </div>
+                  <dl className="mt-4 space-y-2 text-sm text-[#d8e4cc]">
+                    {properties.length > 0 ? (
+                      properties.map(([key, value]) => (
+                        <div key={key} className="flex justify-between gap-4">
+                          <dt className="font-semibold text-[#fff9e8]">{key}</dt>
+                          <dd className="truncate text-right">
+                            {stringifyProperty(value)}
+                          </dd>
+                        </div>
+                      ))
+                    ) : (
+                      <div>No properties</div>
+                    )}
+                  </dl>
+                </article>
+              );
+            }),
+          )}
         </div>
       </div>
     </section>
